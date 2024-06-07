@@ -1,0 +1,16 @@
+#version 450
+
+layout(set = 0, binding = 0) buffer Data {
+    uint data[];
+} buf;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x * 3;
+    uint r = buf.data[idx];
+    uint g = buf.data[idx + 1];
+    uint b = buf.data[idx + 2];
+    //uint gray = (306 * r + 601 * g + 117 * b) >> 10;
+    buf.data[idx] = r;
+    buf.data[idx + 1] = g;
+    buf.data[idx + 2] = b;
+}

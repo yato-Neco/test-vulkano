@@ -1,0 +1,21 @@
+[package]
+name = "test-vulkano"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+vulkano = "0.34"
+winit = "0.28"
+vulkano-shaders = "0.34"
+png = "0.17.13"
+image = "0.25.1"
+
+
+opencv = {version = "0.92.0",  default-features = false, features = [
+    "clang-runtime",
+    "highgui",
+    "videoio",
+    "imgproc",
+    "imgcodecs",
+]}
