@@ -1,8 +1,9 @@
 use core::slice;
-use std::ffi::c_void;
-use std::sync::Arc;
 use opencv::highgui::{self, imshow, WINDOW_NORMAL};
 use opencv::traits::Boxed;
+use std::ffi::c_void;
+use std::sync::Arc;
+use std::time::Instant;
 use vulkano::image::Image;
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::VulkanLibrary;
@@ -28,7 +29,9 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 
-use opencv::core::{Mat, MatTraitConst, MatTraitConstManual, Mat_AUTO_STEP, Size, CV_32F, CV_32S, CV_32SC3, CV_8UC3};
+use opencv::core::{
+    Mat, MatTraitConst, MatTraitConstManual, Mat_AUTO_STEP, Size, CV_32F, CV_32S, CV_32SC3, CV_8UC3,
+};
 use opencv::prelude::VideoCaptureTrait;
 use opencv::videoio::{CAP_PROP_FRAME_HEIGHT, CAP_PROP_FRAME_WIDTH};
 use opencv::{imgproc, videoio};
@@ -36,8 +39,7 @@ use opencv::{imgproc, videoio};
 fn main() {
     //let image = ImageReader::open("src/cri.png").unwrap().decode().unwrap();
     //let img = image.to_rgb32f().to_vec();
-    let img =vec![1920*1080*3];
-
+    let img = vec![1920 * 1080 * 3];
 
     let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
     let instance = Instance::new(
@@ -90,8 +92,6 @@ fn main() {
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
-
-
     let shader = cs::load(device.clone()).expect("failed to create shader module");
 
     let cs = shader.entry_point("main").unwrap();
@@ -120,60 +120,55 @@ fn main() {
     let descriptor_set_layout = descriptor_set_layouts
         .get(descriptor_set_layout_index)
         .unwrap();
-  
 
     let command_buffer_allocator = StandardCommandBufferAllocator::new(
         device.clone(),
         StandardCommandBufferAllocatorCreateInfo::default(),
     );
 
-   
-
     let work_group_counts = [1920 * 1080, 1, 1];
     //let work_group_counts = [1024, 1, 1];
 
-  
-
-
-    
-    let mut cam = videoio::VideoCapture::new(1, videoio::CAP_ANY).unwrap(); // 0 is the default camera
+    let mut cam = videoio::VideoCapture::new(0, videoio::CAP_ANY).unwrap(); // 0 is the default camera
     cam.set(CAP_PROP_FRAME_WIDTH, 1920 as f64).unwrap();
     cam.set(CAP_PROP_FRAME_HEIGHT, 1080 as f64).unwrap();
 
     let mut frame =
         unsafe { Mat::new_size(Size::from((1080 as i32, 1920 as i32)), CV_8UC3).unwrap() };
 
-    let mut rgb_frame = unsafe {
-            Mat::new_size(Size::from((1080 as i32, 1920 as i32)), CV_8UC3).unwrap()
-        };
+    let mut rgb_frame =
+        unsafe { Mat::new_size(Size::from((1080 as i32, 1920 as i32)), CV_8UC3).unwrap() };
 
-    
+    cam.read(&mut frame).unwrap();
 
-    
-     loop {
+    //opencv::imgproc::cvt_color(&frame, &mut rgb_frame, imgproc::COLOR_BGR2RGB, 0).unwrap();
+    let image = frame.data_bytes().unwrap();
+    let image: Vec<u32> = image.iter().map(|p| *p as u32).collect();
+    let data_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        image,
+    )
+    .expect("failed to create buffer");
+
+    loop {
         cam.read(&mut frame).unwrap();
 
         //opencv::imgproc::cvt_color(&frame, &mut rgb_frame, imgproc::COLOR_BGR2RGB, 0).unwrap();
-        let image= frame.data_bytes().unwrap();
-
-        let image:Vec<u32> = image.iter().map(|p| *p as u32).collect();
+        let image = frame.data_bytes().unwrap();
+        let time = Instant::now();
+        let image: Vec<u32> = image.iter().map(|p| *p as u32).collect();
 
         //println!("{}",image[100]);
-
-        let data_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            image,
-        )
-        .expect("failed to create buffer");
+        data_buffer.write().unwrap().copy_from_slice(&image);
 
         let descriptor_set = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
@@ -191,26 +186,27 @@ fn main() {
         .unwrap();
 
         command_buffer_builder
-        .bind_pipeline_compute(compute_pipeline.clone())
-        .unwrap()
-        .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
-            compute_pipeline.layout().clone(),
-            descriptor_set_layout_index as u32,
-            descriptor_set,
-        )
-        .unwrap()
-        .dispatch(work_group_counts)
-        .unwrap();
-    
+            .bind_pipeline_compute(compute_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                compute_pipeline.layout().clone(),
+                descriptor_set_layout_index as u32,
+                descriptor_set,
+            )
+            .unwrap()
+            .dispatch(work_group_counts)
+            .unwrap();
+            
         let command_buffer = command_buffer_builder.build().unwrap();
 
         let future = sync::now(device.clone())
-        .then_execute(queue.clone(), command_buffer)
-        .unwrap()
-        .then_signal_fence_and_flush()
-        .unwrap();
-        future.wait(None).unwrap();  // None is an optional timeout
+            .then_execute(queue.clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap();
+        
+        future.wait(None).unwrap(); // None is an optional timeout
 
         //let mut buf = data_buffer.write().unwrap();
 
@@ -219,7 +215,8 @@ fn main() {
 
         let image = data_buffer.read().unwrap();
 
-        let image:Vec<u8> = image.iter().map(|p| *p as u8).collect();
+        println!("{:?}", time.elapsed());
+        let image: Vec<u8> = image.iter().map(|p| *p as u8).collect();
 
         let src1 = unsafe {
             Mat::new_rows_cols_with_data_unsafe(
@@ -231,22 +228,17 @@ fn main() {
             )
             .unwrap()
         };
-       
+
         imshow("32F Image", &src1).unwrap();
 
         let key = highgui::wait_key(1).unwrap();
         if key > 0 && key != 255 {
             break;
         }
-       
+
         //future.wait(None).unwrap();
         //println!("更新");
     }
-    
-    
-   
-    
-    
 
     /*
     future.wait(None).unwrap();
@@ -269,10 +261,6 @@ fn main() {
         //assert_eq!(*val, n as u32 * 3);
     }
     */
-    
-
-
-    
 
     println!("Everything succeeded!");
 }
